@@ -1,0 +1,58 @@
+format_version: portable-evidence-semantics-v1
+domain: edgar
+physical_table: evidence
+dialect: sqlite
+provenance: >
+  DRAFT written from the EDGAR evidence schema and question templates. Unlike the broker
+  semantic model, it was NOT informed by pilot error analysis, so EDGAR semantic_model
+  results are a first-pass (holdout-style) condition, not a development comparison.
+
+grain: One row is one reported value of one XBRL concept for one measured period, as reported in one filing.
+
+entities:
+  company:
+    key: [cik]
+    attributes: [ticker, entity_name]
+  series:
+    description: The history of one measured period of one concept, across every filing that reported it.
+    key: [cik, taxonomy, concept, unit, start, end]
+  filing_version:
+    description: One filing (accession). One accession can report several periods and concepts.
+    key: [accn]
+    attributes: [form, filed]
+
+columns:
+  evidence_id: {role: identifier, note: Return this column only.}
+  cik: {role: company key, type: text, note: 10 digits with leading zeros; compare as text.}
+  ticker: {role: company attribute}
+  entity_name: {role: company attribute}
+  taxonomy: {role: concept namespace, note: Always us-gaap.}
+  concept: {role: metric definition, note: Exact XBRL concept; different revenue concepts are NOT merged.}
+  item: {role: metric family, note: "One of 50 families (download_edgar.py ITEMS). revenue groups four concepts; every other family is exactly one concept, e.g. gross_profit, interest_expense, investing_cash_flow."}
+  label: {role: description, nullable: true}
+  unit: {role: unit, values: [USD, USD/shares]}
+  start: {role: period start, type: ISO date}
+  end: {role: period end, type: ISO date}
+  val: {role: measure, type: real, note: Can be negative; as reported, not split-adjusted.}
+  accn: {role: filing identifier}
+  form: {role: filing type, values: ["10-K", "10-K/A", "10-Q", "10-Q/A"], note: "Annual forms are 10-K and 10-K/A."}
+  filed: {role: version timestamp, type: ISO date, note: Order versions of a series by filed. Cutoff filters apply to filed.}
+  source_url: {role: provenance}
+
+definitions:
+  same_period: Rows with equal cik, taxonomy, concept, unit, start and end.
+  latest_as_of_cutoff: For each period, the row with the greatest filed on or before the cutoff; a tie on filed is ambiguous.
+  consecutive_revision: Two rows of the same period that are adjacent when ordered by filed.
+  percent_revision: 100 * abs(new_val - old_val) / abs(old_val), excluding old_val = 0.
+  boundary_change: Last row filed strictly before the boundary and first row filed on or after it, within the cutoff.
+  annual_vintage: An annual-form accession that reports BOTH annual periods being compared; both values of one calculation come from the same accn.
+
+sqlite_patterns:
+  order_versions: "ROW_NUMBER() OVER (PARTITION BY cik, concept, unit, start, \"end\" ORDER BY filed)"
+  previous_version: "LAG(val) OVER (PARTITION BY cik, concept, unit, start, \"end\" ORDER BY filed)"
+  reserved_word: end is an SQL keyword; quote it as "end".
+
+pitfalls:
+  - Do not compare different concepts, units or periods as if they were one series.
+  - Return every supporting row the question names (for example both rows of each revision, or all four rows of a vintage comparison), not only one row or an aggregate.
+  - Keep rows whose val did not change when the question asks for both versions.
